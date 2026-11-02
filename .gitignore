@@ -1,0 +1,19 @@
+# build / test artifacts
+.gocache/
+.gotmp/
+gitleak-out/
+# local scan outputs (live-history/ keeps the retained CTF evidence)
+live/
+live-dump/
+live2/
+tests/_tmp/
+# binaries and per-target scan artifacts (source only in this repo)
+gitleak.exe
+gitleak
+gitleak-out/
+ctf2/
+ctf2-*.json
+live-history/
+# generated test artifacts
+tests/__pycache__/
+tests/E2E_REPORT.md
