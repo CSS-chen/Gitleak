@@ -18,50 +18,9 @@ import (
 
 	"gitleak/internal/app"
 	"gitleak/internal/httpc"
+	"gitleak/internal/i18n"
 	"gitleak/internal/ui"
 )
-
-const usageText = "gitleak - fast .git exposure scanner and repository dumper\n" +
-	"\n" +
-	"Usage:\n" +
-	"  gitleak --auto [flags] <url>   one-shot full dump (implies --history --all-branches --write-git)\n" +
-	"  gitleak scan [flags] <url...>\n" +
-	"  gitleak dump [flags] <url>\n" +
-	"  gitleak auto [flags] <url...>  scan, then dump the vulnerable targets\n" +
-	"  gitleak version\n" +
-	"\n" +
-	"Flags:\n" +
-	"  -l, --list FILE      read targets from FILE (- for stdin)\n" +
-	"  -o, --out DIR        output directory (default gitleak-out)\n" +
-	"      --json FILE      write the JSON report to FILE\n" +
-	"      --auto           top-level auto mode: detect + full history dump, JSON auto-written\n" +
-	"  -c, --concurrency N  global concurrent requests (default 64)\n" +
-	"      --per-host N     concurrent requests per host (default 8)\n" +
-	"      --rate N         request rate limit per second (0 = unlimited)\n" +
-	"  -t, --timeout D      per request timeout (default 10s)\n" +
-	"      --retries N      retries per request (default 3)\n" +
-	"  -A, --user-agent UA  User-Agent header\n" +
-	"  -H, --header K:V     extra request header (repeatable)\n" +
-	"      --proxy URL      HTTP or SOCKS5 proxy URL\n" +
-	"  -k, --insecure       skip TLS certificate verification\n" +
-	"      --max-body MB    maximum response body size in MB (default 64)\n" +
-	"      --threads N      worker goroutines (default 32)\n" +
-	"      --history        download the full commit history\n" +
-	"      --all-branches   follow every ref while downloading history\n" +
-	"      --write-git      materialise a usable .git directory (implies --history)\n" +
-	"      --resume         reuse previously cached objects\n" +
-	"      --scan-secrets   scan restored files for credentials\n" +
-	"      --extra          probe extra leak paths (.svn, .hg, .env, ...)\n" +
-	"      --no-extract     detect only, download nothing\n" +
-	"      --max-pack MB    maximum packfile size in MB (default 1024)\n" +
-	"      --max-objects N  maximum history objects (default 200000)\n" +
-	"      --debug          verbose debug output\n" +
-	"      --quiet          suppress banners and progress\n" +
-	"      --no-color       disable ANSI colours\n" +
-	"\n" +
-	"Auto mode: gitleak --auto <url> writes <out>/<slug>.json next to the restored repository.\n" +
-	"Exit codes: 0 success (found / restored), 2 nothing found, 3 operational failure, 1 usage.\n" +
-	"Use this tool only against systems you are authorised to test.\n"
 
 // headerFlags collects repeated -H K:V arguments.
 type headerFlags []string
@@ -99,6 +58,7 @@ type options struct {
 	noExtract   bool
 	maxPackMB   int
 	maxObjects  int
+	lang        string
 	debug       bool
 	quiet       bool
 	noColor     bool
@@ -133,10 +93,10 @@ func (o *options) validate() error {
 		o.retries = 0
 	}
 	if o.timeout <= 0 {
-		return errors.New("--timeout must be positive")
+		return errors.New(i18n.Tr("--timeout must be positive"))
 	}
 	if o.maxBodyMB <= 0 {
-		return errors.New("--max-body must be positive")
+		return errors.New(i18n.Tr("--max-body must be positive"))
 	}
 	if o.maxPackMB <= 0 {
 		o.maxPackMB = 1024
@@ -145,7 +105,7 @@ func (o *options) validate() error {
 		o.maxObjects = 0
 	}
 	if o.out == "" {
-		return errors.New("--out must not be empty")
+		return errors.New(i18n.Tr("--out must not be empty"))
 	}
 	return nil
 }
@@ -183,11 +143,19 @@ func registerFlags(fs *flag.FlagSet, o *options) {
 	fs.IntVar(&o.maxObjects, "max-objects", o.maxObjects, "maximum history objects")
 	fs.BoolVar(&o.debug, "debug", o.debug, "verbose debug output")
 	fs.BoolVar(&o.quiet, "quiet", o.quiet, "suppress banners and progress")
+	fs.StringVar(&o.lang, "lang", o.lang, "output language: en or zh")
 	fs.BoolVar(&o.noColor, "no-color", o.noColor, "disable ANSI colours")
 }
 
 // Run executes the CLI and returns the process exit code.
 func Run(args []string) int {
+	lang, err := resolveLang(args)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "gitleak: %v\n", err)
+		return 1
+	}
+	i18n.Set(lang)
+	usageText = usageFor(lang)
 	if len(args) == 0 {
 		fmt.Fprint(os.Stdout, usageText)
 		return 1
@@ -210,7 +178,7 @@ func Run(args []string) int {
 		if topLevelAuto(args) {
 			return runAutoMode(stripAuto(args))
 		}
-		fmt.Fprintf(os.Stderr, "gitleak: unknown subcommand %q\n\n%s", cmd, usageText)
+		fmt.Fprintf(os.Stderr, i18n.Format("gitleak: unknown subcommand %q\n\n%s", cmd, usageText))
 		return 1
 	}
 }
@@ -267,8 +235,17 @@ func parseOptions(name string, args []string) (*options, []string, int) {
 			fmt.Fprint(os.Stdout, usageText)
 			return nil, nil, 0
 		}
-		fmt.Fprintf(os.Stderr, "gitleak: %v\n\n%s", err, usageText)
+		fmt.Fprintf(os.Stderr, i18n.Format("gitleak: %v\n\n%s", err, usageText))
 		return nil, nil, 1
+	}
+	if o.lang != "" {
+		l, ok := i18n.Parse(o.lang)
+		if !ok {
+			fmt.Fprintf(os.Stderr, "gitleak: unsupported language %q (supported: en, zh)\n", o.lang)
+			return nil, nil, 1
+		}
+		i18n.Set(l)
+		usageText = usageFor(l)
 	}
 	if err := o.validate(); err != nil {
 		fmt.Fprintf(os.Stderr, "gitleak: %v\n", err)
@@ -287,7 +264,7 @@ func newClient(o *options, u *ui.UI) (*httpc.Client, error) {
 	for _, raw := range o.headers {
 		name, value, ok := strings.Cut(raw, ":")
 		if !ok || strings.TrimSpace(name) == "" {
-			return nil, fmt.Errorf("invalid header %q (want K:V)", raw)
+			return nil, fmt.Errorf(i18n.Tr("invalid header %q (want K:V)"), raw)
 		}
 		headers.Add(strings.TrimSpace(name), strings.TrimSpace(value))
 	}
@@ -321,7 +298,7 @@ func collectTargets(args []string, listPath string) []app.Target {
 			data, err = os.ReadFile(listPath)
 		}
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "gitleak: cannot read target list: %v\n", err)
+			fmt.Fprintf(os.Stderr, i18n.Format("gitleak: cannot read target list: %v\n", err))
 			return nil
 		}
 		sc := bufio.NewScanner(strings.NewReader(string(data)))
@@ -338,7 +315,7 @@ func collectTargets(args []string, listPath string) []app.Target {
 	for _, r := range raw {
 		t, err := app.ParseTarget(r)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "gitleak: skipping %q: %v\n", r, err)
+			fmt.Fprintf(os.Stderr, i18n.Format("gitleak: skipping %q: %v\n", r, err))
 			continue
 		}
 		out = append(out, t)
@@ -371,7 +348,7 @@ func writeReport(o *options, report *app.Report) bool {
 		return true
 	}
 	if err := app.WriteReport(o.jsonPath, report); err != nil {
-		fmt.Fprintf(os.Stderr, "gitleak: cannot write report: %v\n", err)
+		fmt.Fprintf(os.Stderr, i18n.Format("gitleak: cannot write report: %v\n", err))
 		return false
 	}
 	return true
@@ -494,7 +471,7 @@ func runDump(args []string) int {
 	}
 	targets := collectTargets(positional, o.list)
 	if len(targets) != 1 {
-		fmt.Fprintf(os.Stderr, "gitleak: dump expects exactly one target, got %d\n\n%s", len(targets), usageText)
+		fmt.Fprintf(os.Stderr, i18n.Format("gitleak: dump expects exactly one target, got %d\n\n%s", len(targets), usageText))
 		return 1
 	}
 	u := newUI(o)
@@ -575,7 +552,7 @@ func runAutoMode(args []string) int {
 		return code
 	}
 	if o.noExtract {
-		fmt.Fprintln(os.Stderr, "gitleak: --no-extract cannot be combined with --auto")
+		fmt.Fprintln(os.Stderr, i18n.Tr("gitleak: --no-extract cannot be combined with --auto"))
 		return 1
 	}
 	targets := collectTargets(positional, o.list)
@@ -621,7 +598,7 @@ func runAutoMode(args []string) int {
 			rep := app.NewReport()
 			rep.Targets = []*app.TargetResult{res}
 			if werr := app.WriteReport(path, rep); werr != nil {
-				fmt.Fprintf(os.Stderr, "gitleak: cannot write report: %v\n", werr)
+				fmt.Fprintf(os.Stderr, i18n.Format("gitleak: cannot write report: %v\n", werr))
 			} else if !o.quiet {
 				u.Infof("  report: %s", path)
 			}
@@ -660,4 +637,39 @@ func runAutoMode(args []string) int {
 		return 3
 	}
 	return 2
+}
+
+// langFlagValue finds an explicit --lang value on the raw command line, before
+// the flag package runs, so help and usage errors already use the right language.
+func langFlagValue(args []string) (string, bool) {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			break
+		}
+		for _, name := range []string{"--lang", "-lang"} {
+			if a == name {
+				if i+1 < len(args) {
+					return args[i+1], true
+				}
+				return "", true
+			}
+			if strings.HasPrefix(a, name+"=") {
+				return a[len(name)+1:], true
+			}
+		}
+	}
+	return "", false
+}
+
+// resolveLang combines --lang, GITLEAK_LANG and the build default.
+func resolveLang(args []string) (i18n.Lang, error) {
+	if raw, ok := langFlagValue(args); ok {
+		l, good := i18n.Parse(raw)
+		if !good {
+			return i18n.EN, fmt.Errorf("unsupported language %q (supported: en, zh)", raw)
+		}
+		return l, nil
+	}
+	return i18n.Detect(), nil
 }

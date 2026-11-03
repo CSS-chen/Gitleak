@@ -8,6 +8,8 @@ import (
 	"os"
 	"strings"
 	"sync"
+
+	"gitleak/internal/i18n"
 )
 
 // ANSI colour codes.
@@ -67,7 +69,7 @@ func (u *UI) Infof(format string, args ...any) {
 	if u.quiet {
 		return
 	}
-	u.printf(u.out, format, args...)
+	u.printf(u.out, i18n.Tr(format), args...)
 }
 
 // Goodf prints a success line.
@@ -75,17 +77,17 @@ func (u *UI) Goodf(format string, args ...any) {
 	if u.quiet {
 		return
 	}
-	u.printf(u.out, u.paint(Green, "  + ")+format, args...)
+	u.printf(u.out, u.paint(Green, "  + ")+i18n.Tr(format), args...)
 }
 
 // Warnf prints a warning line.
 func (u *UI) Warnf(format string, args ...any) {
-	u.printf(u.errOut, u.paint(Yellow, "  ! ")+format, args...)
+	u.printf(u.errOut, u.paint(Yellow, "  ! ")+i18n.Tr(format), args...)
 }
 
 // Errorf prints an error line.
 func (u *UI) Errorf(format string, args ...any) {
-	u.printf(u.errOut, u.paint(Red, "  x ")+format, args...)
+	u.printf(u.errOut, u.paint(Red, "  x ")+i18n.Tr(format), args...)
 }
 
 // Debugf prints only when debug mode is on.
@@ -101,12 +103,12 @@ func (u *UI) Rawf(format string, args ...any) {
 	if u.quiet {
 		return
 	}
-	u.printf(u.out, format, args...)
+	u.printf(u.out, i18n.Tr(format), args...)
 }
 
 // Outf prints to stdout regardless of quiet.
 func (u *UI) Outf(format string, args ...any) {
-	u.printf(u.out, format, args...)
+	u.printf(u.out, i18n.Tr(format), args...)
 }
 
 // Banner prints the tool banner.
@@ -119,8 +121,8 @@ func (u *UI) Banner(version string) {
 	line := strings.Repeat("-", 62)
 	fmt.Fprintln(u.out, u.paint(Cyan, line))
 	fmt.Fprintln(u.out, u.paint(Bold+Cyan, "  gitleak ")+u.paint(Dim, version)+
-		"  fast .git leak scanner & repository dumper")
-	fmt.Fprintln(u.out, u.paint(Dim, "  use only against systems you are authorised to test"))
+		"  "+i18n.Tr("fast .git leak scanner & repository dumper"))
+	fmt.Fprintln(u.out, u.paint(Dim, "  "+i18n.Tr("use only against systems you are authorised to test")))
 	fmt.Fprintln(u.out, u.paint(Cyan, line))
 }
 
@@ -131,7 +133,7 @@ func (u *UI) Progress(format string, args ...any) {
 	}
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	fmt.Fprintf(u.errOut, "\r\x1b[2K  ~ "+format, args...)
+	fmt.Fprintf(u.errOut, "\r\x1b[2K  ~ "+i18n.Tr(format), args...)
 }
 
 // ClearProgress erases the progress line.

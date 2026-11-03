@@ -9,10 +9,11 @@ import (
 	"time"
 
 	"gitleak/internal/gitx"
+	"gitleak/internal/i18n"
 )
 
 // Version is the tool version reported by the CLI and JSON output.
-const Version = "1.2.0"
+const Version = "1.3.0"
 
 // SecretFinding is a credential-looking string found in restored files.
 type SecretFinding struct {
@@ -129,9 +130,9 @@ func idsToHex(ids []gitx.ObjectID) []string {
 func (r *TargetResult) SummaryLine() string {
 	if !r.Vulnerable {
 		if r.Error != "" {
-			return fmt.Sprintf("%s  (error: %s)", r.Root, r.Error)
+			return i18n.Format("%s  (error: %s)", r.Root, i18n.Tr(r.Error))
 		}
-		return fmt.Sprintf("%s  (not vulnerable)", r.Root)
+		return i18n.Format("%s  (not vulnerable)", r.Root)
 	}
 	parts := []string{r.Root}
 	if r.HeadRef != "" {

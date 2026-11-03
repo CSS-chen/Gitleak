@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"gitleak/internal/i18n"
 	"gitleak/internal/ui"
 )
 
@@ -67,7 +68,7 @@ func scanSecrets(root string, records []FileRecord, u *ui.UI) []SecretFinding {
 			}
 			out = append(out, SecretFinding{Path: rec.Path, Kind: p.kind, Match: match})
 			if u != nil {
-				u.Warnf("possible secret in %s: %s", rec.Path, p.kind)
+				u.Warnf("possible secret in %s: %s", rec.Path, i18n.Tr(p.kind))
 			}
 		}
 	}

@@ -200,6 +200,7 @@ VALUE_FLAGS = {
     "-l", "--list", "-o", "--out", "--json", "-c", "--concurrency",
     "--per-host", "--rate", "-t", "--timeout", "--retries", "-A",
     "--user-agent", "-H", "--header", "--proxy", "--threads", "--max-body",
+    "-lang", "--lang",
 }
 BOOL_FLAGS = {
     "-k", "--insecure", "--history", "--all-branches", "--write-git",
@@ -235,9 +236,14 @@ def order_args(args):
     return [sub] + flags + positionals
 
 
-def run_tool(args, timeout=120, raw=False):
-    """Run gitleak. Unless raw=True, hoist flags ahead of positional targets."""
+def run_tool(args, timeout=120, raw=False, env=None):
+    """Run gitleak. Unless raw=True, hoist flags ahead of positional targets.
+
+    env adds environment variables on top of the harness environment (for
+    GITLEAK_LANG coverage).
+    """
     cmd = [str(EXE)] + ([str(a) for a in args] if raw else order_args(args))
+    child_env = None if env is None else {**os.environ, **env}
     started = time.monotonic()
     try:
         cp = subprocess.run(
@@ -245,6 +251,7 @@ def run_tool(args, timeout=120, raw=False):
             cwd=str(WORKSPACE),
             capture_output=True,
             text=True,
+            env=child_env,
             encoding="utf-8",
             errors="replace",
             timeout=timeout,
@@ -1108,6 +1115,106 @@ def scenario_j_auto_flag(ctx, res):
         expect_exit(chk, r3, 2, "--auto on a soft-404 trap")
         chk.expect_equal(len(sorted(Path(out3).glob("*.json"))), 0,
                          "--auto: no report written for a non-vulnerable target")
+
+
+@scenario("K-bilingual-en-zh")
+def scenario_k_bilingual(ctx, res):
+    chk = res.checks
+
+    # English is the default: help has no Chinese text and documents --lang.
+    rh = run_tool(["--help"], raw=True, timeout=30)
+    res.record(rh)
+    chk.expect("fast .git" in rh.combined and "Usage:" in rh.combined,
+               "en: default help is English", output_tail(rh))
+    chk.expect("快速" not in rh.combined, "en: default help has no Chinese text")
+    chk.expect("--lang" in rh.combined, "en: help documents the --lang flag")
+
+    # --lang zh switches help and the banner to Chinese.
+    rzh = run_tool(["--help", "--lang", "zh"], raw=True, timeout=30)
+    res.record(rzh)
+    chk.expect("用法" in rzh.combined and "快速" in rzh.combined,
+               "en: --lang zh switches help to Chinese", output_tail(rzh))
+
+    with loose_server(ctx) as srv:
+        url = srv.url()
+
+        # default language scan: English banner and summary
+        out1 = ctx.outdir("k-en-scan")
+        j1 = ctx.file_path("json", "k-en-scan.json")
+        r1 = run_tool(["scan", url, "-o", str(out1), "--json", str(j1), "-t", "5s"],
+                      timeout=120)
+        res.record(r1)
+        expect_exit(chk, r1, 0, "en scan (default language)")
+        chk.expect("fast .git leak scanner" in r1.combined,
+                   "en scan: English banner", output_tail(r1))
+        chk.expect("请求=" not in r1.combined, "en scan: no Chinese request summary")
+        report1 = load_report(j1, chk, "en scan report")
+        if report1 is not None:
+            chk.expect(isinstance(report1.get("version"), str)
+                       and bool(report1.get("version")),
+                       "en scan: report version present", repr(report1.get("version")))
+
+        # --lang zh: Chinese banner, Chinese summary, JSON untouched
+        out2 = ctx.outdir("k-zh-scan")
+        j2 = ctx.file_path("json", "k-zh-scan.json")
+        r2 = run_tool(["scan", url, "--lang", "zh", "-o", str(out2), "--json", str(j2),
+                       "-t", "5s"], timeout=120)
+        res.record(r2)
+        expect_exit(chk, r2, 0, "zh scan via --lang zh")
+        chk.expect("快速" in r2.combined and "目标=" in r2.combined
+                   and "请求=" in r2.combined,
+                   "zh scan: Chinese banner and summary", output_tail(r2))
+        report2 = load_report(j2, chk, "zh scan report")
+        if report2 is not None and validate_report(report2, chk, "zh scan report"):
+            tgt2 = find_target(report2, url, chk, "zh scan report")
+            if tgt2 is not None:
+                expect_vulnerable(chk, tgt2, True, "zh scan target")
+
+        # GITLEAK_LANG=zh selects Chinese without any flag.
+        out3 = ctx.outdir("k-env-scan")
+        j3 = ctx.file_path("json", "k-env-scan.json")
+        r3 = run_tool(["scan", url, "-o", str(out3), "--json", str(j3), "-t", "5s"],
+                      timeout=120, env={"GITLEAK_LANG": "zh"})
+        res.record(r3)
+        expect_exit(chk, r3, 0, "GITLEAK_LANG=zh scan")
+        chk.expect("快速" in r3.combined and "请求=" in r3.combined,
+                   "env: GITLEAK_LANG=zh switches output to Chinese", output_tail(r3))
+
+        # An explicit --lang en wins over the environment.
+        out4 = ctx.outdir("k-env-override")
+        j4 = ctx.file_path("json", "k-env-override.json")
+        r4 = run_tool(["scan", url, "--lang", "en", "-o", str(out4), "--json", str(j4),
+                       "-t", "5s"], timeout=120, env={"GITLEAK_LANG": "zh"})
+        res.record(r4)
+        expect_exit(chk, r4, 0, "--lang en overrides GITLEAK_LANG")
+        chk.expect("fast .git leak scanner" in r4.combined and "快速" not in r4.combined,
+                   "--lang en overrides the environment", output_tail(r4))
+
+        # Unsupported language is a usage error, not a silent fallback.
+        r5 = run_tool(["scan", url, "--lang", "fr"], timeout=30)
+        res.record(r5)
+        expect_exit(chk, r5, 1, "unsupported --lang fr")
+        chk.expect("unsupported language" in r5.combined,
+                   "bad lang: reports unsupported language", output_tail(r5))
+
+        # Chinese dump: labels and restored summary are translated.
+        out5 = ctx.outdir("k-zh-dump")
+        j5 = ctx.file_path("json", "k-zh-dump.json")
+        r6 = run_tool(["dump", url, "--lang", "zh", "-o", str(out5), "--json", str(j5),
+                       "-t", "5s"], timeout=120)
+        res.record(r6)
+        expect_exit(chk, r6, 0, "zh dump")
+        chk.expect("目标:" in r6.combined and "输出:" in r6.combined
+                   and "恢复" in r6.combined,
+                   "zh dump: Chinese target/output/restore labels", output_tail(r6))
+        report6 = load_report(j5, chk, "zh dump report")
+        if report6 is not None and validate_report(report6, chk, "zh dump report"):
+            tgt6 = find_target(report6, url, chk, "zh dump report")
+            if tgt6 is not None:
+                expect_vulnerable(chk, tgt6, True, "zh dump target")
+                restored = resolve_out_dir(tgt6)
+                if restored is not None:
+                    compare_trees(ctx.loose["files"], restored, chk, "zh dump restore")
 
 
 @scenario("I-benign-static-site")

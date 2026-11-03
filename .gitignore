@@ -10,6 +10,8 @@ tests/_tmp/
 # binaries and per-target scan artifacts (source only in this repo)
 gitleak.exe
 gitleak
+gitleak-en.exe
+gitleak-zh.exe
 gitleak-out/
 ctf2/
 ctf2-*.json

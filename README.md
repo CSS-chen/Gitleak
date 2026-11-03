@@ -34,6 +34,9 @@ Windows / Linux / macOS，内置连接池 + 全局/单主机并发控制 + 令�
 - **一键自动模式**：`gitleak --auto <url>` 只需一个参数即完成探测 + 全历史下载 + 可用 `.git`
   还原 + 依赖项（stash）恢复，并自动写 JSON 报告，无需再记一长串 `--history --all-branches
   --write-git --json -o` 参数。
+- **双语界面（en / zh）**：内置中英双语终端输出，运行时 `--lang en|zh` 切换、`GITLEAK_LANG`
+  环境变量控制默认值；另提供 `gitleak-en.exe` / `gitleak-zh.exe` 两个开箱即用的构建，`zh`
+  版本默认中文、`en` 版本默认英文。JSON 报告字段保持英文，便于脚本消费。
 
 ## 安装 / 构建
 
@@ -51,6 +54,24 @@ Windows 上如果默认缓存目录不可写，可显式指定：
 ```powershell
 $env:GOCACHE="C:\temp\gocache"; $env:GOTMPDIR="C:\temp\gotmp"; go build -o gitleak.exe .
 ```
+
+### 双语版本构建
+
+仓库自带 `build.ps1`，一次生成默认英文与默认中文两个可执行文件：
+
+```powershell
+.\build.ps1
+# 产生 gitleak-en.exe（默认英文）与 gitleak-zh.exe（默认中文）
+```
+
+等价的手工命令：
+
+```sh
+go build -o gitleak-en.exe .
+go build -ldflags "-X gitleak/internal/i18n.BuildDefault=zh" -o gitleak-zh.exe .
+```
+
+两个二进制行为完全相同，只是**默认输出语言**不同；任一版本都可以用 `--lang` 覆盖默认值。
 
 ## 快速开始
 
@@ -72,9 +93,31 @@ $env:GOCACHE="C:\temp\gocache"; $env:GOTMPDIR="C:\temp\gotmp"; go build -o gitle
 
 # 检测 + 自动恢复，并扫描凭据
 ./gitleak auto -l targets.txt -o out --scan-secrets --json out/report.json
+
+# 中文输出（任一构建都可用；zh 构建默认就是中文）
+./gitleak-zh.exe scan https://example.com/
+./gitleak scan https://example.com/ --lang zh
 ```
 
 未写协议的输入默认按 `https://` 处理；会自动去除末尾 `/`、`/.git`、`/.git/HEAD` 等后缀。
+
+## 双语界面（en / zh）
+
+语言选择顺序（优先级从高到低）：
+
+1. 命令行 `--lang en|zh`（等同 `-lang`）；
+2. 环境变量 `GITLEAK_LANG=en|zh`；
+3. 构建默认值：`gitleak-en.exe` 为 `en`，`gitleak-zh.exe` 为 `zh`，`gitleak.exe` 为 `en`。
+
+```sh
+gitleak scan https://example.com/ --lang zh     # 本次中文
+gitleak dump https://example.com/ --lang en     # 本次英文
+GITLEAK_LANG=zh gitleak scan -l targets.txt     # 环境变量中文
+```
+
+已翻译内容：帮助与用法、banner、检测/恢复/历史/pack/stash 进度、扫描统计、最终摘要、
+错误提示、凭据告警类型；JSON 报告的字段名与取值（如 `kind`、`path`、`vulnerable`）保持英文，
+不受界面语言影响。中文文案采用 `%[n]` 索引占位符，调整语序也不会错位。
 
 ## 子命令
 
@@ -102,7 +145,8 @@ $env:GOCACHE="C:\temp\gocache"; $env:GOTMPDIR="C:\temp\gotmp"; go build -o gitle
 | `--rate N` | 0（不限） | 全局请求速率（令牌桶，每秒） |
 | `-t, --timeout D` | `10s` | 单请求超时 |
 | `--retries N` | 3 | 单请求重试次数（指数退避 + 抖动，尊重 Retry-After） |
-| `-A, --user-agent UA` | `gitleak/1.2.0` | User-Agent |
+| `-A, --user-agent UA` | `gitleak/1.3.0` | User-Agent |
+| `--lang en\|zh` | `en`（zh 构建为 `zh`） | 终端输出语言：英文 / 中文；也可用 `GITLEAK_LANG` 环境变量 |
 | `-H, --header K:V` | | 附加请求头，可重复 |
 | `--proxy URL` | | `http://`、`https://`、`socks5://`、`socks5h://` 代理 |
 | `-k, --insecure` | | 跳过 TLS 证书校验 |
@@ -138,7 +182,7 @@ gitleak-out/
 ```json
 {
   "tool": "gitleak",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "generated_at": "2026-11-02T12:00:00Z",
   "targets": [
     {
@@ -197,10 +241,12 @@ gitleak-out/
 ```text
 .
 ├── main.go                # 入口
-├── internal/cli/          # 参数解析、子命令、退出码
+├── build.ps1              # 生成 gitleak-en.exe / gitleak-zh.exe 双语构建
+├── internal/cli/          # 参数解析、子命令、退出码、英文/中文帮助
 ├── internal/app/          # 检测、对象获取、历史、恢复、凭据扫描、报告
 ├── internal/gitx/         # 松散对象、索引 v2/v3/v4、树/提交/标签、idx/pack 解析
 ├── internal/httpc/        # HTTP 客户端：并发、重试、限速、代理、统计
+├── internal/i18n/         # 中英文案表与语言选择（en / zh）
 ├── internal/ui/           # 终端输出与进度
 └── tests/                 # 端到端测试（本地 git fixture + 回环 HTTP 服务器）
 ```
@@ -211,6 +257,7 @@ gitleak-out/
 go vet ./...
 go test ./...
 python tests/run_e2e.py     # 端到端：真实 git 仓库 + 本地回环 HTTP 服务
+.\build.ps1                 # 双语构建并做基本自检
 ```
 
 ## 实战验证
@@ -229,10 +276,12 @@ python tests/run_e2e.py     # 端到端：真实 git 仓库 + 本地回环 HTTP 
   `ctfhub{d7ebc4de04d9d61d05237b5f}` 位于 stash 树的 `193011107810587.txt`；
   恢复仓库可执行 `git stash list` / `git show refs/stash`，证据保留在 ctf2/ 与 ctf2-dump.json。
 
-本地端到端测试：13 个场景 / 1158 项断言全部通过，覆盖松散对象、packed-only、
+本地端到端测试：14 个场景 / 1252 项断言全部通过，覆盖松散对象、packed-only、
 --history/--write-git（还原后 git status 干净）、index 403 回退、软 404 / 假 HEAD 陷阱、
-对象库被封的干净失败、多目标并发与 140 文件逐字节比对，以及 `--auto` 一键模式
-（自动报告、自动全历史、还原后 HEAD 一致）；报告见 tests/E2E_REPORT.md。
+对象库被封的干净失败、多目标并发与 140 文件逐字节比对、`--auto` 一键模式
+（自动报告、自动全历史、还原后 HEAD 一致），以及双语界面（默认英文、`--lang zh`、
+`GITLEAK_LANG=zh`、显式 `--lang en` 覆盖环境变量、非法语言报错、中文 dump/还原比对）；
+报告见 tests/E2E_REPORT.md。
 
 端到端测试覆盖：松散/打包仓库、软 404、假 HEAD、索引 403 回退、对象 403 失败、
 `--resume`、`--write-git`（`git status` 干净）、`--history`、多目标与 `--list`、
