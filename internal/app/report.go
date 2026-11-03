@@ -12,7 +12,7 @@ import (
 )
 
 // Version is the tool version reported by the CLI and JSON output.
-const Version = "1.1.0"
+const Version = "1.2.0"
 
 // SecretFinding is a credential-looking string found in restored files.
 type SecretFinding struct {

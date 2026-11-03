@@ -1033,6 +1033,83 @@ def scenario_h_auto(ctx, res):
         expect_exit(chk, r2, 2, "auto: no vulnerable target -> exit 2")
 
 
+@scenario("J-auto-flag-full-dump")
+def scenario_j_auto_flag(ctx, res):
+    chk = res.checks
+
+    # usage: --auto without a target must be a usage error
+    ru = run_tool(["--auto"], raw=True, timeout=30)
+    res.record(ru)
+    expect_exit(chk, ru, 1, "--auto without a target (usage error)")
+
+    with loose_server(ctx) as srv:
+        url = srv.url()
+        out = ctx.outdir("j-auto")
+        r = run_tool(["--auto", url, "-o", str(out), "-t", "5s"], raw=True, timeout=240)
+        res.record(r)
+        expect_exit(chk, r, 0, "--auto full dump (loose repo)")
+        chk.expect("auto mode" in r.combined.lower(), "--auto: announces auto mode", output_tail(r))
+        chk.expect("commit" in r.combined.lower() or "history" in r.combined.lower(),
+                   "--auto: history download is visible in the output", output_tail(r))
+
+        json_files = sorted(Path(out).glob("*.json"))
+        chk.expect_equal(len(json_files), 1,
+                         "--auto: JSON report auto-written next to the dump")
+        if json_files:
+            report = load_report(json_files[0], chk, "auto flag report")
+            if validate_report(report, chk, "auto flag report"):
+                chk.expect_equal(len(report.get("targets", [])), 1,
+                                 "--auto: one target in report")
+                tgt = find_target(report, url, chk, "auto flag report")
+                if tgt is not None:
+                    expect_vulnerable(chk, tgt, True, "--auto target")
+                    chk.expect_equal(tgt.get("head_commit"), ctx.loose["head_commit"],
+                                     "--auto: head_commit matches git rev-parse HEAD")
+                    restored = resolve_out_dir(tgt)
+                    if restored is not None:
+                        chk.expect_equal(restored.name, json_files[0].stem,
+                                         "--auto: report name equals dump directory slug")
+                        compare_trees(ctx.loose["files"], restored, chk, "--auto restore")
+                        check_git_usable(restored, chk, "--auto write-git")
+                        commits = tgt.get("history_commits")
+                        chk.expect(_is_int(commits) and commits >= ctx.loose["commits"],
+                                   "--auto: downloaded full history",
+                                   "history_commits=" + repr(commits)
+                                   + " expected>=" + str(ctx.loose["commits"]))
+                        cp = run_git(["rev-parse", "HEAD"], restored)
+                        chk.expect_equal(cp.returncode, 0, "--auto: git rev-parse HEAD works",
+                                         "stderr=" + clip(cp.stderr, 400))
+                        if cp.returncode == 0:
+                            chk.expect_equal(cp.stdout.strip(), ctx.loose["head_commit"],
+                                             "--auto: rebuilt HEAD preserved")
+
+        # flags after the target are accepted, and --json overrides the auto path
+        out2 = ctx.outdir("j-auto-flags-after")
+        j2 = ctx.file_path("json", "j-auto-flags-after.json")
+        r2 = run_tool([url, "--auto", "-o", str(out2), "--json", str(j2), "-t", "5s"],
+                      raw=True, timeout=240)
+        res.record(r2)
+        expect_exit(chk, r2, 0, "--auto with flags after the target")
+        report2 = load_report(j2, chk, "auto explicit json report")
+        if validate_report(report2, chk, "auto explicit json report"):
+            tgt2 = find_target(report2, url, chk, "auto explicit json report")
+            if tgt2 is not None:
+                expect_vulnerable(chk, tgt2, True, "--auto explicit json target")
+                chk.expect_equal(len(sorted(Path(out2).glob("*.json"))), 0,
+                                 "--auto: --json suppresses the automatic sibling report")
+
+    # negative: a soft-404 lookalike is not vulnerable and exits 2
+    with servers.FixtureServer(ctx.loose["root"], prefix="/app", mode="soft404",
+                               name="auto-trap") as trap:
+        out3 = ctx.outdir("j-auto-benign")
+        r3 = run_tool(["--auto", trap.url(), "-o", str(out3), "-t", "5s"],
+                      raw=True, timeout=120)
+        res.record(r3)
+        expect_exit(chk, r3, 2, "--auto on a soft-404 trap")
+        chk.expect_equal(len(sorted(Path(out3).glob("*.json"))), 0,
+                         "--auto: no report written for a non-vulnerable target")
+
+
 @scenario("I-benign-static-site")
 def scenario_i_benign(ctx, res):
     chk = res.checks

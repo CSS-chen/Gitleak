@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -23,15 +24,17 @@ import (
 const usageText = "gitleak - fast .git exposure scanner and repository dumper\n" +
 	"\n" +
 	"Usage:\n" +
+	"  gitleak --auto [flags] <url>   one-shot full dump (implies --history --all-branches --write-git)\n" +
 	"  gitleak scan [flags] <url...>\n" +
 	"  gitleak dump [flags] <url>\n" +
-	"  gitleak auto [flags] <url...>\n" +
+	"  gitleak auto [flags] <url...>  scan, then dump the vulnerable targets\n" +
 	"  gitleak version\n" +
 	"\n" +
 	"Flags:\n" +
 	"  -l, --list FILE      read targets from FILE (- for stdin)\n" +
 	"  -o, --out DIR        output directory (default gitleak-out)\n" +
 	"      --json FILE      write the JSON report to FILE\n" +
+	"      --auto           top-level auto mode: detect + full history dump, JSON auto-written\n" +
 	"  -c, --concurrency N  global concurrent requests (default 64)\n" +
 	"      --per-host N     concurrent requests per host (default 8)\n" +
 	"      --rate N         request rate limit per second (0 = unlimited)\n" +
@@ -56,6 +59,7 @@ const usageText = "gitleak - fast .git exposure scanner and repository dumper\n"
 	"      --quiet          suppress banners and progress\n" +
 	"      --no-color       disable ANSI colours\n" +
 	"\n" +
+	"Auto mode: gitleak --auto <url> writes <out>/<slug>.json next to the restored repository.\n" +
 	"Exit codes: 0 success (found / restored), 2 nothing found, 3 operational failure, 1 usage.\n" +
 	"Use this tool only against systems you are authorised to test.\n"
 
@@ -203,6 +207,9 @@ func Run(args []string) int {
 	case "dump":
 		return runDump(args[1:])
 	default:
+		if topLevelAuto(args) {
+			return runAutoMode(stripAuto(args))
+		}
 		fmt.Fprintf(os.Stderr, "gitleak: unknown subcommand %q\n\n%s", cmd, usageText)
 		return 1
 	}
@@ -527,4 +534,130 @@ func runDump(args []string) int {
 		return 0
 	}
 	return 3
+}
+
+// autoReportSuffix is appended to the target slug for the JSON report that top
+// level auto mode writes when --json is not given.
+const autoReportSuffix = ".json"
+
+// topLevelAuto reports whether the command line asks for the one-shot --auto
+// mode. It is only consulted when the first argument is not a known subcommand,
+// so "gitleak --auto URL", "gitleak -o out --auto URL" and "gitleak URL --auto"
+// all reach it, while "gitleak dump --auto URL" stays a normal dump invocation.
+func topLevelAuto(args []string) bool {
+	for _, a := range args {
+		if a == "--auto" || a == "-auto" {
+			return true
+		}
+	}
+	return false
+}
+
+// stripAuto removes the --auto switch before the regular flag parser runs.
+func stripAuto(args []string) []string {
+	out := make([]string, 0, len(args))
+	for _, a := range args {
+		if a == "--auto" || a == "-auto" {
+			continue
+		}
+		out = append(out, a)
+	}
+	return out
+}
+
+// runAutoMode implements "gitleak --auto <url>": detect the target and, if it is
+// exposed, perform the full repository dump (history, every branch and a usable
+// .git directory) without requiring the caller to repeat those flags. A JSON
+// report is written automatically next to the dump unless --json overrides it.
+func runAutoMode(args []string) int {
+	o, positional, code := parseOptions("auto", args)
+	if code >= 0 {
+		return code
+	}
+	if o.noExtract {
+		fmt.Fprintln(os.Stderr, "gitleak: --no-extract cannot be combined with --auto")
+		return 1
+	}
+	targets := collectTargets(positional, o.list)
+	if len(targets) == 0 {
+		fmt.Fprint(os.Stderr, usageText)
+		return 1
+	}
+	// Auto mode is always the full dump.
+	o.history = true
+	o.allBranches = true
+	o.writeGit = true
+
+	u := newUI(o)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	c, err := newClient(o, u)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "gitleak: %v\n", err)
+		return 3
+	}
+	defer c.Close()
+	u.Banner(app.Version)
+	u.Infof("auto mode: detect + full dump (--history --all-branches --write-git)")
+	bc := app.NewBaselineCache()
+	results := make([]*app.TargetResult, 0, len(targets))
+	for _, t := range targets {
+		if ctx.Err() != nil {
+			break
+		}
+		det := app.Detect(ctx, c, t, bc, true)
+		if !det.Vulnerable && det.NetworkErr && !t.ExplicitScheme {
+			alt := t.WithScheme("http")
+			if det2 := app.Detect(ctx, c, alt, bc, true); det2.Vulnerable {
+				det = det2
+			}
+		}
+		res := app.Dump(ctx, c, det, dumpOptions(o), u)
+		results = append(results, res)
+		// Leave a machine readable report next to the dump unless the caller
+		// asked for a specific --json path.
+		if o.jsonPath == "" && res.Vulnerable && res.OutDir != "" {
+			path := filepath.Join(o.out, t.Slug()+autoReportSuffix)
+			rep := app.NewReport()
+			rep.Targets = []*app.TargetResult{res}
+			if werr := app.WriteReport(path, rep); werr != nil {
+				fmt.Fprintf(os.Stderr, "gitleak: cannot write report: %v\n", werr)
+			} else if !o.quiet {
+				u.Infof("  report: %s", path)
+			}
+		}
+	}
+	report := app.NewReport()
+	report.Targets = results
+	if !o.quiet {
+		u.Rawf("")
+		for _, r := range results {
+			if r.Vulnerable {
+				u.Goodf("%s", r.SummaryLine())
+			} else {
+				u.Infof("%s", r.SummaryLine())
+			}
+		}
+		u.Rawf("")
+		printStats(u, c)
+	}
+	if !writeReport(o, report) {
+		return 3
+	}
+	found, restored := 0, 0
+	for _, r := range results {
+		if r.Vulnerable {
+			found++
+		}
+		if r.FilesRestored > 0 {
+			restored++
+		}
+	}
+	if restored > 0 {
+		return 0
+	}
+	if found > 0 {
+		return 3
+	}
+	return 2
 }

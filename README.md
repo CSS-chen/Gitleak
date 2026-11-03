@@ -31,6 +31,9 @@ Windows / Linux / macOS，内置连接池 + 全局/单主机并发控制 + 令�
   Stripe / JWT / 私钥 / 硬编码口令等）。
 - **附加泄露探测**：`--extra` 检查 `.svn`、`.hg`、`.env`、`.DS_Store` 等。
 - **批量扫描**：命令行参数或 `-l` 列表文件混合输入，JSON 报告汇总，确定性输出目录名。
+- **一键自动模式**：`gitleak --auto <url>` 只需一个参数即完成探测 + 全历史下载 + 可用 `.git`
+  还原 + 依赖项（stash）恢复，并自动写 JSON 报告，无需再记一长串 `--history --all-branches
+  --write-git --json -o` 参数。
 
 ## 安装 / 构建
 
@@ -52,6 +55,9 @@ $env:GOCACHE="C:\temp\gocache"; $env:GOTMPDIR="C:\temp\gotmp"; go build -o gitle
 ## 快速开始
 
 ```sh
+# 一键自动：探测 + 全历史 / 所有分支 / 可用 .git 还原 + 自动 JSON 报告
+./gitleak --auto https://example.com/
+
 # 检测单个目标（不下载，只看是否暴露 .git）
 ./gitleak scan https://example.com/.git/
 
@@ -77,6 +83,7 @@ $env:GOCACHE="C:\temp\gocache"; $env:GOTMPDIR="C:\temp\gotmp"; go build -o gitle
 | `scan <url...>` | 仅检测哪些目标暴露 `.git`，可选 `--json` 报告 | 0=发现漏洞，2=未发现，3=错误 |
 | `dump <url>` | 检测并恢复**单个**目标（必须恰好 1 个） | 0=恢复成功，2=未发现，3=恢复失败 |
 | `auto <url...>` | 先批量检测，再对存在漏洞的目标自动执行 dump | 0=成功，2=全部无漏洞，3=有漏洞但恢复失败 |
+| `--auto <url>` | 顶层一键自动：等价 `dump --history --all-branches --write-git`，并自动写 JSON 报告 | 0=恢复成功，2=未发现，3=恢复失败 |
 | `version` | 打印版本号 | 0 |
 | `help` | 打印帮助 | 0 |
 
@@ -89,12 +96,13 @@ $env:GOCACHE="C:\temp\gocache"; $env:GOTMPDIR="C:\temp\gotmp"; go build -o gitle
 | `-l, --list FILE` | | 从文件读取目标列表（`-` 为 stdin） |
 | `-o, --out DIR` | `gitleak-out` | 输出根目录 |
 | `--json FILE` | | 写出 JSON 报告 |
+| `--auto` | | 顶层一键自动模式（隐含 `--history --all-branches --write-git`；自动写 `<out>/<slug>.json`） |
 | `-c, --concurrency N` | 64 | 全局并发请求上限 |
 | `--per-host N` | 8 | 单主机并发请求上限 |
 | `--rate N` | 0（不限） | 全局请求速率（令牌桶，每秒） |
 | `-t, --timeout D` | `10s` | 单请求超时 |
 | `--retries N` | 3 | 单请求重试次数（指数退避 + 抖动，尊重 Retry-After） |
-| `-A, --user-agent UA` | `gitleak/1.1.0` | User-Agent |
+| `-A, --user-agent UA` | `gitleak/1.2.0` | User-Agent |
 | `-H, --header K:V` | | 附加请求头，可重复 |
 | `--proxy URL` | | `http://`、`https://`、`socks5://`、`socks5h://` 代理 |
 | `-k, --insecure` | | 跳过 TLS 证书校验 |
@@ -115,11 +123,12 @@ $env:GOCACHE="C:\temp\gocache"; $env:GOTMPDIR="C:\temp\gotmp"; go build -o gitle
 
 ```text
 gitleak-out/
-└── example.com_1a2b3c4d/          # 目标 slug：主机+路径 + root 的 sha1 前 8 位（确定性）
-    ├── ...                        # 恢复出的工作区文件（普通 dump）
-    ├── .git/                      # --write-git 时生成的可直接使用的仓库
-    ├── .gitleak-stash/            # 从 refs/stash 恢复的文件（若目标暴露 stash）
-    └── .gitleak-cache/            # 仅 --resume 的缓存（位于恢复树之外）
+├── example.com_1a2b3c4d/          # 目标 slug：主机+路径 + root 的 sha1 前 8 位（确定性）
+│   ├── ...                        # 恢复出的工作区文件（普通 dump）
+│   ├── .git/                      # --write-git 时生成的可直接使用的仓库
+│   ├── .gitleak-stash/            # 从 refs/stash 恢复的文件（若目标暴露 stash）
+│   └── .gitleak-cache/            # 仅 --resume 的缓存（位于恢复树之外）
+└── example.com_1a2b3c4d.json      # --auto 自动写出的 JSON 报告（放在恢复树之外，不污染 git 状态）
 ```
 
 扫描结果的 `out_dir` 同样按确定性 slug 生成，便于对照与去重。
@@ -129,7 +138,7 @@ gitleak-out/
 ```json
 {
   "tool": "gitleak",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "generated_at": "2026-11-02T12:00:00Z",
   "targets": [
     {
@@ -220,13 +229,14 @@ python tests/run_e2e.py     # 端到端：真实 git 仓库 + 本地回环 HTTP 
   `ctfhub{d7ebc4de04d9d61d05237b5f}` 位于 stash 树的 `193011107810587.txt`；
   恢复仓库可执行 `git stash list` / `git show refs/stash`，证据保留在 ctf2/ 与 ctf2-dump.json。
 
-本地端到端测试：12 个场景 / 1063 项断言全部通过，覆盖松散对象、packed-only、
+本地端到端测试：13 个场景 / 1158 项断言全部通过，覆盖松散对象、packed-only、
 --history/--write-git（还原后 git status 干净）、index 403 回退、软 404 / 假 HEAD 陷阱、
-对象库被封的干净失败、多目标并发与 140 文件逐字节比对；报告见 tests/E2E_REPORT.md。
+对象库被封的干净失败、多目标并发与 140 文件逐字节比对，以及 `--auto` 一键模式
+（自动报告、自动全历史、还原后 HEAD 一致）；报告见 tests/E2E_REPORT.md。
 
 端到端测试覆盖：松散/打包仓库、软 404、假 HEAD、索引 403 回退、对象 403 失败、
 `--resume`、`--write-git`（`git status` 干净）、`--history`、多目标与 `--list`、
-字节级还原比对。
+`--auto` 一键模式、字节级还原比对。
 
 ## 已知限制
 
